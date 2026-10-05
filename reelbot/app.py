@@ -456,7 +456,12 @@ def main() -> None:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     store = Store(settings.data_dir / "reelbot.sqlite3")
     telegram = TelegramAPI(settings.telegram_bot_token)
-    director = Director(api_key=settings.openai_api_key) if settings.openai_api_key else None
+    director = Director(
+        api_key=settings.openai_api_key,
+        base_url=settings.ai_base_url,
+        cheap_model=settings.ai_cheap_model,
+        creative_model=settings.ai_creative_model,
+    ) if settings.openai_api_key else None
     bot = ReelBot(settings, store, telegram, director)
     worker = RenderWorker(settings, store, telegram, director)
 

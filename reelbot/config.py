@@ -19,6 +19,9 @@ class Settings:
     upload_secret: str = ""
     operator_chat_id: int | None = None
     brand_profile_path: Path | None = None
+    ai_base_url: str = "https://api.imarouter.com/v1"
+    ai_cheap_model: str = "gpt-5.2"
+    ai_creative_model: str = "gpt-5.5"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -31,7 +34,9 @@ class Settings:
         data_dir = Path(os.getenv("REELBOT_DATA_DIR", "./data")).resolve()
         return cls(
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
-            openai_api_key=os.getenv("OPENAI_API_KEY", ""),
+            # MiA Router is OpenAI-compatible. Keep the legacy variable as a
+            # fallback for existing installations.
+            openai_api_key=os.getenv("AI_ROUTER_API_KEY", os.getenv("OPENAI_API_KEY", "")),
             data_dir=data_dir,
             allowed_chat_ids=ids,
             monthly_openai_limit_usd=float(os.getenv("OPENAI_MONTHLY_LIMIT_USD", "10")),
@@ -42,6 +47,9 @@ class Settings:
             upload_secret=os.getenv("UPLOAD_SECRET", ""),
             operator_chat_id=int(os.environ["OPERATOR_CHAT_ID"]) if os.getenv("OPERATOR_CHAT_ID") else None,
             brand_profile_path=Path(os.environ["BRAND_PROFILE_PATH"]).resolve() if os.getenv("BRAND_PROFILE_PATH") else None,
+            ai_base_url=os.getenv("AI_BASE_URL", "https://api.imarouter.com/v1").rstrip("/"),
+            ai_cheap_model=os.getenv("AI_CHEAP_MODEL", "gpt-5.2"),
+            ai_creative_model=os.getenv("AI_CREATIVE_MODEL", "gpt-5.5"),
         )
 
     def validate(self) -> None:

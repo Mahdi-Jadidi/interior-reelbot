@@ -94,14 +94,15 @@ class AIDirector:
     def __init__(
         self,
         api_key: str,
-        cheap_model: str = "gpt-6-luna",
-        creative_model: str = "gpt-6.1-sol",
+        cheap_model: str = "gpt-5.2",
+        creative_model: str = "gpt-5.5",
         *,
+        base_url: str = "https://api.imarouter.com/v1",
         client: Any | None = None,
     ) -> None:
         if not api_key and client is None:
             raise ValueError("OpenAI API key is required")
-        self.client = client or AsyncOpenAI(api_key=api_key)
+        self.client = client or AsyncOpenAI(api_key=api_key, base_url=base_url)
         self.cheap_model = cheap_model
         self.creative_model = creative_model
         self.usage_events: list[dict[str, Any]] = []

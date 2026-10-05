@@ -68,8 +68,9 @@ class DirectorTests(unittest.TestCase):
         self.assertEqual(result["source_facts"], ["آشپزخانه کوچک"])
         self.assertTrue(client.responses.calls[0]["text"]["format"]["strict"])
         self.assertFalse(client.responses.calls[0]["store"])
-        self.assertGreater(director.total_cost_usd, 0)
-        self.assertGreater(director.usage_events[0]["estimated_cost_usd"], 0)
+        self.assertEqual(director.total_cost_usd, 0)
+        self.assertIsNone(director.usage_events[0]["estimated_cost_usd"])
+        self.assertGreater(director.usage_events[0]["input_tokens"], 0)
 
     def test_rejects_unsupported_fact_and_wrong_language(self):
         for fake in [plan(source_facts=["متریال مرمر ایتالیایی"]), plan(language="en")]:
