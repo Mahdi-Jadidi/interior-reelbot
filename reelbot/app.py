@@ -4,13 +4,13 @@ import asyncio
 import hashlib
 import json
 import logging
-import logging
 import uuid
 from pathlib import Path
 from typing import Any
 
 from .ai import Director
 from .config import Settings
+from .media import sha256_file
 from .store import Store
 from .telegram import TelegramAPI
 from .upload import make_upload_link
@@ -20,9 +20,6 @@ LOG = logging.getLogger(__name__)
 LANGUAGES = {"fa": "فارسی", "ar": "عربی", "en": "انگلیسی"}
 CHARACTERS = {"none": "بدون کاراکتر", "owner": "چهرهٔ کارفرما", "fictional": "شخصیت ساختگی"}
 PRESENCE = {"none": "بدون حضور چهره", "cameo": "حضور کوتاه", "intermittent": "چند بخش", "throughout": "در سراسر ویدیو"}
-LOG = logging.getLogger(__name__)
-
-
 def plan_hash(plan: dict[str, Any]) -> str:
     raw = json.dumps(plan, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -150,6 +147,12 @@ class ReelBot:
             await self.telegram.send_message(chat_id, "درخواست فعلی در حال بررسی است. برای ریل جداگانه «/new» را بزنید.")
             return
         attachment = self._attachment(message)
+        if not attachment and "document" in message:
+            await self.telegram.send_message(
+                chat_id,
+                "این نوع فایل پشتیبانی نمی‌شود. عکس، ویدیو یا صوت را با پسوند JPG/PNG/MP4/MOV/MP3 بفرستید.",
+            )
+            return
         if attachment:
             kind, file_id, size, suffix = attachment
             if size and size > 20_000_000:
@@ -168,7 +171,7 @@ class ReelBot:
         if attachment or text:
             await self.telegram.send_message(
                 chat_id,
-                "دریافت شد. فایل یا توضیح دیگری دارید بفرستید؛ وقتی تمام شد ادامه دهید.",
+                "دریافت شد. برای حفظ کیفیت اصلی، عکس و ویدیوی خام را به‌شکل File/Document بفرستید. فایل یا توضیح دیگری دارید بفرستید؛ وقتی تمام شد ادامه دهید.",
                 [[("فایل‌ها تمام شد", f"finish:{reel['id']}")]],
             )
 
@@ -248,11 +251,15 @@ class ReelBot:
         elif action == "deliver" and len(parts) == 3:
             if reel["status"] == "awaiting_final_approval" and reel.get("final_hash", "").startswith(parts[2]):
                 final_path = Path(reel["final_path"])
+                if not final_path.is_file() or sha256_file(final_path) != reel["final_hash"]:
+                    await self.telegram.send_message(chat_id, "فایل نهایی با نسخهٔ تأییدشده مطابقت ندارد؛ برای بررسی متوقف شد.")
+                    return
                 cover = final_path.with_name("cover.jpg")
                 if cover.is_file():
                     await self.telegram.send_photo(chat_id, cover, caption="کاور همین نسخه")
                 plan = json.loads(reel["plan_json"])
                 await self.telegram.send_message(chat_id, "کپشن پیشنهادی:\n\n" + plan.get("caption", ""))
+                await self.telegram.send_document(chat_id, final_path, caption="فایل اصلی MP4 تأییدشده، بدون تبدیل تلگرام")
                 self.store.update_reel(reel["id"], status="delivered")
                 await self.telegram.send_message(chat_id, "ویدیوی نهایی تأیید شد ✅ فایل همین نسخه برای انتشار آماده است.")
             else:
@@ -268,7 +275,7 @@ class ReelBot:
         reel = self.store.create_reel(chat_id, "fa")
         await self.telegram.send_message(
             chat_id,
-            "زبان این ریل را انتخاب کنید. بعد عکس‌ها، ویدیوها و توضیح پروژه را بفرستید.",
+            "زبان این ریل را انتخاب کنید. بعد عکس‌ها، ویدیوها و توضیح پروژه را بفرستید. برای حفظ کیفیت اصلی، عکس و ویدیوی خام را به‌شکل File/Document ارسال کنید؛ ارسال معمولی عکس ممکن است فشرده شود.",
             [[("فارسی", f"lang:{reel['id']}:fa"), ("عربی", f"lang:{reel['id']}:ar"), ("English", f"lang:{reel['id']}:en")]],
         )
 
@@ -284,7 +291,7 @@ class ReelBot:
         if not self.settings.ai_router_api_key or self.director is None:
             await self.telegram.send_message(
                 chat_id,
-                "فایل‌های پروژه ذخیره شدند. تولید خودکار سناریو پس از افزودن کلید OpenAI API فعال می‌شود؛ "
+                "فایل‌های پروژه ذخیره شدند. تولید خودکار سناریو پس از تنظیم دسترسی مدل هوش مصنوعی فعال می‌شود؛ "
                 "بعداً دوباره «فایل‌ها تمام شد» را بزنید.",
                 [[("فایل‌ها تمام شد", f"finish:{reel['id']}")]],
             )

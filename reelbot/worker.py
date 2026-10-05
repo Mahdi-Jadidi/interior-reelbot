@@ -114,14 +114,20 @@ class RenderWorker:
             # this host. Never silently replace an approved presenter shot.
             raise MediaError("Presenter shot needs a verified generation or source-video workflow")
         source_assets = self.store.list_assets(reel["id"])
-        planned_indices = [shot["asset_index"] for shot in plan.get("shotlist", [])
-                           if isinstance(shot, dict) and isinstance(shot.get("asset_index"), int)]
-        if planned_indices:
-            assets = [Path(source_assets[index]["path"]) for index in planned_indices
-                      if 0 <= index < len(source_assets) and source_assets[index]["kind"] in {"photo", "video"}]
-        else:
-            assets = [Path(asset["path"]) for asset in source_assets
-                      if asset["kind"] in {"photo", "video"}]
+        shotlist = plan.get("shotlist")
+        if not isinstance(shotlist, list) or not shotlist:
+            raise ValueError("Approved plan has no valid shot list")
+        planned_indices: list[int] = []
+        for shot in shotlist:
+            if not isinstance(shot, dict):
+                raise ValueError("Approved plan contains an invalid shot")
+            index = shot.get("asset_index")
+            if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(source_assets):
+                raise ValueError("Approved shot refers to an unavailable asset")
+            if source_assets[index]["kind"] not in {"photo", "video"}:
+                raise ValueError("Approved shot refers to a nonvisual asset")
+            planned_indices.append(index)
+        assets = [Path(source_assets[index]["path"]) for index in planned_indices]
         if not assets:
             raise MediaError("No visual source assets were provided")
         if reel["language"] == "en":

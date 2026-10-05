@@ -1,4 +1,5 @@
 import json
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ class FakeTelegram:
     def __init__(self):
         self.messages = []
         self.callbacks = []
+        self.documents = []
 
     async def send_message(self, chat_id, text, buttons=None):
         self.messages.append((chat_id, text, buttons))
@@ -19,6 +21,10 @@ class FakeTelegram:
 
     async def answer_callback(self, callback_id, text=""):
         self.callbacks.append((callback_id, text))
+
+    async def send_document(self, chat_id, path, caption=""):
+        self.documents.append((chat_id, Path(path).read_bytes(), caption))
+        return {}
 
     async def download(self, file_id, destination):
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -175,3 +181,45 @@ async def test_video_feedback_preserves_approved_plan_for_operator_revision(setu
     assert updated["status"] == "needs_operator"
     assert updated["video_feedback"] == "زیرنویس را بزرگ‌تر کن"
     assert store.approval_valid(reel_id, reel["plan_hash"])
+
+
+@pytest.mark.asyncio
+async def test_final_approval_delivers_exact_hashed_mp4_as_document(setup_bot, tmp_path):
+    bot, store, telegram, _ = setup_bot
+    await bot.handle_update(message(60, 123, "/new"))
+    reel_id = store.get_active_reel(123)["id"]
+    await bot.handle_update(message(61, 123, "پروژهٔ اتاق"))
+    store.add_asset(reel_id, "photo", "sample.jpg")
+    await bot.handle_update(callback(62, 123, f"finish:{reel_id}"))
+    reel = store.get_reel(reel_id)
+    await bot.handle_update(callback(63, 123, f"approve:{reel_id}:{reel['plan_version']}"))
+    payload = b"approved-original-mp4"
+    final_path = tmp_path / "final.mp4"
+    final_path.write_bytes(payload)
+    digest = hashlib.sha256(payload).hexdigest()
+    store.update_reel(reel_id, status="awaiting_final_approval", final_path=str(final_path), final_hash=digest)
+
+    await bot.handle_update(callback(64, 123, f"deliver:{reel_id}:{digest[:12]}"))
+
+    assert telegram.documents == [(123, payload, "فایل اصلی MP4 تأییدشده، بدون تبدیل تلگرام")]
+    assert store.get_reel(reel_id)["status"] == "delivered"
+
+
+@pytest.mark.asyncio
+async def test_final_approval_stops_if_mp4_changed_after_review(setup_bot, tmp_path):
+    bot, store, telegram, _ = setup_bot
+    await bot.handle_update(message(70, 123, "/new"))
+    reel_id = store.get_active_reel(123)["id"]
+    await bot.handle_update(message(71, 123, "پروژهٔ اتاق"))
+    store.add_asset(reel_id, "photo", "sample.jpg")
+    await bot.handle_update(callback(72, 123, f"finish:{reel_id}"))
+    reel = store.get_reel(reel_id)
+    await bot.handle_update(callback(73, 123, f"approve:{reel_id}:{reel['plan_version']}"))
+    final_path = tmp_path / "final.mp4"
+    final_path.write_bytes(b"different-file")
+    store.update_reel(reel_id, status="awaiting_final_approval", final_path=str(final_path), final_hash="approved-hash")
+
+    await bot.handle_update(callback(74, 123, f"deliver:{reel_id}:approved-hash"))
+
+    assert telegram.documents == []
+    assert store.get_reel(reel_id)["status"] == "awaiting_final_approval"

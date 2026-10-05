@@ -50,9 +50,15 @@ class FakeClient:
 def plan(**overrides):
     value = {
         "idea": "تحول فضای کوچک", "hook": "این گوشه را ببینید", "story": "شروع، جزئیات، پایان",
-        "script": "این فضا گرم‌تر شد", "shotlist": ["نمای ورودی", "نمای جزئیات"],
+        "script": "این فضا گرم‌تر شد", "shotlist": [
+            {"asset_index": 0, "description": "نمای ورودی"},
+            {"asset_index": 0, "description": "نمای جزئیات"},
+        ],
+        "considered_hooks": ["این گوشه را ببینید", "هوک دوم", "هوک سوم"],
+        "selection_reason": "بهترین تطبیق با تصاویر موجود",
         "character": "none", "presence": "none", "caption": "جزئیات خانه",
         "language": "fa", "source_facts": ["آشپزخانه کوچک"], "clarifying_question": None,
+        "claim_support": [],
     }
     value.update(overrides)
     return value
@@ -69,7 +75,9 @@ class DirectorTests(unittest.TestCase):
     def test_structured_plan_and_usage(self):
         client = FakeClient([plan()])
         director = AIDirector("test", client=client)
-        result = asyncio.run(director.propose_plan("آشپزخانه کوچک", "fa", {}, []))
+        result = asyncio.run(director.propose_plan(
+            "آشپزخانه کوچک", "fa", {}, [{"kind": "photo", "path": "missing.jpg"}]
+        ))
         self.assertIsNone(result["estimated_higgsfield_credits"])
         self.assertEqual(result["source_facts"], ["آشپزخانه کوچک"])
         self.assertTrue(client.chat.completions.calls[0]["response_format"]["json_schema"]["strict"])
@@ -78,10 +86,16 @@ class DirectorTests(unittest.TestCase):
         self.assertGreater(director.usage_events[0]["input_tokens"], 0)
 
     def test_rejects_unsupported_fact_and_wrong_language(self):
-        for fake in [plan(source_facts=["متریال مرمر ایتالیایی"]), plan(language="en")]:
+        for fake in [
+            plan(source_facts=["متریال مرمر ایتالیایی"]),
+            plan(language="en"),
+            plan(claim_support=[{"claim": "این فضا گرم‌تر شد", "evidence": "سنگ مرمر ایتالیایی"}]),
+        ]:
             director = AIDirector("test", client=FakeClient([fake]))
             with self.assertRaises(ValueError):
-                asyncio.run(director.propose_plan("آشپزخانه کوچک", "fa", {}, []))
+                asyncio.run(director.propose_plan(
+                    "آشپزخانه کوچک", "fa", {}, [{"kind": "photo", "path": "missing.jpg"}]
+                ))
 
     def test_classify_voice_match_and_unavailable_speech_endpoints(self):
         client = FakeClient([{"category": "feedback"}, {"matches": False}])
@@ -119,7 +133,9 @@ class DirectorTests(unittest.TestCase):
             for path in paths:
                 path.write_bytes(b"raw video must not be uploaded")
             assets = [{"kind": "video", "path": str(path), "file_id": "telegram-secret"} for path in paths]
-            client = FakeClient([plan(source_facts=["آشپزخانه کوچک"])])
+            client = FakeClient([plan(source_facts=["آشپزخانه کوچک"], shotlist=[
+                {"asset_index": 0, "description": "نمای آشپزخانه"}
+            ])])
             director = AIDirector("test", client=client)
             with patch("reelbot.ai._small_jpeg", return_value=b"bounded-jpeg") as preview:
                 result = asyncio.run(director.propose_plan("آشپزخانه کوچک", "fa", {}, assets))
@@ -133,6 +149,20 @@ class DirectorTests(unittest.TestCase):
             self.assertNotIn("private-project", visible_payload)
             self.assertNotIn("telegram-secret", visible_payload)
             self.assertNotIn("raw video must not be uploaded", visible_payload)
+
+    def test_rejects_malformed_or_unsupported_shotlists(self):
+        invalid_plans = [
+            plan(shotlist=["نمای ورودی"]),
+            plan(shotlist=[{"asset_index": 8, "description": "نمای ورودی"}]),
+            plan(shotlist=[{"asset_index": 0, "description": ""}]),
+            plan(considered_hooks=["یک", "یک", "سه"]),
+        ]
+        for fake in invalid_plans:
+            director = AIDirector("test", client=FakeClient([fake]))
+            with self.assertRaises(ValueError):
+                asyncio.run(director.propose_plan(
+                    "آشپزخانه کوچک", "fa", {}, [{"kind": "photo", "path": "missing.jpg"}]
+                ))
 
     def test_unavailable_visual_does_not_invent_description(self):
         director = AIDirector("test", client=FakeClient([]))
