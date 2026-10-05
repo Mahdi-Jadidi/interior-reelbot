@@ -125,8 +125,6 @@ class RenderWorker:
         if not assets:
             raise MediaError("No visual source assets were provided")
         if reel["language"] == "en":
-            if not self.store.reserve_spend(reel["id"], "openai", 0.08, self.settings.monthly_openai_limit_usd):
-                raise ValueError("OpenAI monthly budget exhausted before English narration")
             narration = self.settings.data_dir / "audio" / str(reel["id"]) / "narration.mp3"
             await self.director.synthesize_english(reel["script"], str(narration))
         else:

@@ -131,18 +131,7 @@ class ReelBot:
             await self._make_plan(reel, feedback=text)
             return
         if reel["status"] == "awaiting_feedback" and (message.get("voice") or message.get("audio")):
-            item = message.get("voice") or message.get("audio")
-            if int(item.get("file_size", 0)) > 20_000_000:
-                await self.telegram.send_message(chat_id, "این ویس بزرگ است؛ لطفاً کوتاه‌تر بفرستید.")
-                return
-            if not self.store.reserve_spend(reel["id"], "openai", 0.02, self.settings.monthly_openai_limit_usd):
-                self.store.update_reel(reel["id"], status="needs_operator")
-                await self.telegram.send_message(chat_id, "سقف هزینهٔ پردازش پر شده است؛ درخواست برای بررسی ثبت شد.")
-                return
-            destination = self.settings.data_dir / "feedback" / str(reel["id"]) / f"{uuid.uuid4().hex}.ogg"
-            await self.telegram.download(item["file_id"], destination)
-            feedback = await self.director.transcribe_voice(str(destination))
-            await self._make_plan(reel, feedback=feedback)
+            await self.telegram.send_message(chat_id, "MiA Router فعلاً گفتار را به متن تبدیل نمی‌کند. لطفاً اصلاحات را متنی بفرستید.")
             return
         if reel["status"] == "awaiting_clarification" and text:
             updated = self.store.update_reel(reel["id"], brief=(reel.get("brief") or "") + "\nپاسخ کارفرما: " + text, status="collecting")
@@ -292,7 +281,7 @@ class ReelBot:
 
     async def _make_plan(self, reel: dict, feedback: str | None = None) -> None:
         chat_id = int(reel["chat_id"])
-        if not self.settings.openai_api_key or self.director is None:
+        if not self.settings.ai_router_api_key or self.director is None:
             await self.telegram.send_message(
                 chat_id,
                 "فایل‌های پروژه ذخیره شدند. تولید خودکار سناریو پس از افزودن کلید OpenAI API فعال می‌شود؛ "
@@ -307,22 +296,13 @@ class ReelBot:
         brief = reel.get("brief") or ""
         audio_assets = [asset for asset in current_assets
                         if asset["kind"] in {"voice", "audio"} and not asset.get("transcript")]
-        for asset in audio_assets:
-            if not self.store.reserve_spend(reel["id"], "openai", 0.02, self.settings.monthly_openai_limit_usd):
-                self.store.update_reel(reel["id"], status="needs_operator")
-                await self.telegram.send_message(chat_id, "سقف هزینهٔ پردازش پر شده است؛ ویس توضیحی برای بررسی ثبت شد.")
+        if audio_assets:
+            await self.telegram.send_message(chat_id, "ویس ذخیره شد، اما MiA Router هنوز API گفتاربه‌متن ندارد. لطفاً توضیح پروژه را هم متنی بفرستید.")
+            if not brief.strip():
                 return
-            try:
-                transcript = await self.director.transcribe_voice(asset["path"])
-            except Exception:
-                LOG.exception("Could not transcribe intake audio for reel %s", reel["id"])
-                await self.telegram.send_message(chat_id, "ویس توضیحی دریافت شد اما پردازش آن ناموفق بود. لطفاً ویس کوتاه‌تر بفرستید یا توضیح را متنی بنویسید.")
-                return
-            self.store.set_asset_transcript(asset["id"], transcript)
-            brief = "\n".join(filter(None, [brief, "توضیح صوتی کارفرما: " + transcript]))
         if brief != (reel.get("brief") or ""):
             reel = self.store.update_reel(reel["id"], brief=brief)
-        if not self.store.reserve_spend(reel["id"], "openai", 0.08, self.settings.monthly_openai_limit_usd):
+        if not self.store.reserve_spend(reel["id"], "miarouter", self.settings.ai_plan_request_cost_usd, self.settings.monthly_ai_limit_usd):
             await self.telegram.send_message(chat_id, "سقف هزینهٔ ماهانهٔ برنامه‌ریزی پر شده است؛ درخواست برای بررسی ثبت شد.")
             self.store.update_reel(reel["id"], status="needs_operator")
             return
@@ -395,36 +375,10 @@ class ReelBot:
         if int(item.get("file_size", 0)) > 20_000_000:
             await self.telegram.send_message(chat_id, "ویس بیش از حد بزرگ است؛ لطفاً آن را کوتاه‌تر بفرستید.")
             return
-        if not self.store.reserve_spend(reel["id"], "openai", 0.02, self.settings.monthly_openai_limit_usd):
-            self.store.update_reel(reel["id"], status="needs_operator")
-            await self.telegram.send_message(chat_id, "ویس دریافت شد ولی سقف هزینهٔ پردازش پر است؛ درخواست برای بررسی ثبت شد.")
-            return
         destination = self.settings.data_dir / "voice" / str(reel["id"]) / f"{uuid.uuid4().hex}.ogg"
         await self.telegram.download(item["file_id"], destination)
-        try:
-            transcript = await self.director.transcribe_voice(str(destination))
-            matches = await self.director.voice_matches_script(reel["script"], transcript)
-        except Exception:
-            LOG.exception("Could not verify voice for reel %s", reel["id"])
-            await self.telegram.send_message(chat_id, "ویس دریافت شد اما پردازش آن ناموفق بود. لطفاً دوباره ارسال کنید.")
-            return
-        if matches:
-            queued = self.store.update_reel(reel["id"], voice_path=str(destination), status="queued")
-            self._enqueue_render(queued)
-            await self.telegram.send_message(chat_id, "ویس دریافت و با متن تأییدشده تطبیق داده شد ✅ ساخت ویدیو آغاز می‌شود.")
-        else:
-            plan = json.loads(reel["plan_json"])
-            plan["script"] = transcript
-            digest = plan_hash(plan)
-            updated = self.store.update_reel(
-                reel["id"], plan_json=json.dumps(plan, ensure_ascii=False), plan_hash=digest,
-                script=transcript, voice_path=str(destination), status="awaiting_plan_approval",
-            )
-            await self.telegram.send_message(
-                chat_id,
-                "در ویس، متن تغییر کرده است. لطفاً همین نسخهٔ اصلاح‌شده را تأیید کنید:\n\n" + plan_card(plan),
-                [[("تأیید طرح و ساخت", f"approve:{reel['id']}:{updated['plan_version']}")], [("اصلاح طرح", f"edit:{reel['id']}")]],
-            )
+        self.store.update_reel(reel["id"], voice_path=str(destination), status="needs_operator")
+        await self.telegram.send_message(chat_id, "ویس ذخیره شد، اما تطبیق خودکار آن با متن در MiA Router هنوز در دسترس نیست؛ پیش از ساخت باید اپراتور متن را بررسی کند.")
 
 
 async def run_polling(bot: ReelBot) -> None:
@@ -457,11 +411,11 @@ def main() -> None:
     store = Store(settings.data_dir / "reelbot.sqlite3")
     telegram = TelegramAPI(settings.telegram_bot_token)
     director = Director(
-        api_key=settings.openai_api_key,
+        api_key=settings.ai_router_api_key,
         base_url=settings.ai_base_url,
         cheap_model=settings.ai_cheap_model,
         creative_model=settings.ai_creative_model,
-    ) if settings.openai_api_key else None
+    ) if settings.ai_router_api_key else None
     bot = ReelBot(settings, store, telegram, director)
     worker = RenderWorker(settings, store, telegram, director)
 

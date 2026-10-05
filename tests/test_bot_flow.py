@@ -97,7 +97,7 @@ async def test_english_plan_requires_current_explicit_approval(setup_bot):
 
 
 @pytest.mark.asyncio
-async def test_persian_waits_for_matching_voice(setup_bot):
+async def test_persian_voice_waits_for_operator_until_mia_has_asr(setup_bot):
     bot, store, telegram, director = setup_bot
     await bot.handle_update(message(10, 123, "/new"))
     reel_id = store.get_active_reel(123)["id"]
@@ -109,12 +109,13 @@ async def test_persian_waits_for_matching_voice(setup_bot):
     assert store.get_reel(reel_id)["status"] == "awaiting_voice"
     assert store.claim_job() is None
     await bot.handle_update(message(14, 123, voice="voice-1"))
-    assert store.get_reel(reel_id)["status"] == "queued"
-    assert store.claim_job()["kind"] == "render"
+    assert store.get_reel(reel_id)["status"] == "needs_operator"
+    assert store.get_reel(reel_id)["voice_path"]
+    assert store.claim_job() is None
 
 
 @pytest.mark.asyncio
-async def test_changed_voice_requires_new_card(setup_bot):
+async def test_voice_is_not_auto_approved_without_asr(setup_bot):
     bot, store, telegram, director = setup_bot
     director.matches = False
     director.transcript = "متن گفتار تغییر کرده"
@@ -127,12 +128,10 @@ async def test_changed_voice_requires_new_card(setup_bot):
     await bot.handle_update(callback(23, 123, f"approve:{reel_id}:{before['plan_version']}"))
     await bot.handle_update(message(24, 123, voice="voice-2"))
     after = store.get_reel(reel_id)
-    assert after["status"] == "awaiting_plan_approval"
-    assert after["plan_version"] > before["plan_version"]
-    assert not store.approval_valid(reel_id, before["plan_hash"])
+    assert after["status"] == "needs_operator"
+    assert after["plan_version"] == before["plan_version"]
+    assert store.approval_valid(reel_id, before["plan_hash"])
     assert store.claim_job() is None
-    await bot.handle_update(callback(25, 123, f"approve:{reel_id}:{after['plan_version']}"))
-    assert store.claim_job()["kind"] == "render"
 
 
 @pytest.mark.asyncio
@@ -144,7 +143,7 @@ async def test_rejects_unknown_chat(setup_bot):
 
 
 @pytest.mark.asyncio
-async def test_intake_voice_is_transcribed_into_the_brief(setup_bot):
+async def test_intake_voice_is_kept_but_mia_router_text_api_does_not_transcribe(setup_bot):
     bot, store, telegram, director = setup_bot
     await bot.handle_update(message(40, 123, "/new"))
     reel_id = store.get_active_reel(123)["id"]
@@ -153,8 +152,9 @@ async def test_intake_voice_is_transcribed_into_the_brief(setup_bot):
     await bot.handle_update(message(42, 123, audio="brief-audio"))
     await bot.handle_update(callback(43, 123, f"finish:{reel_id}"))
     reel = store.get_reel(reel_id)
-    assert "توضیح صوتی کارفرما: متن گفتار" in reel["brief"]
-    assert store.list_assets(reel_id)[1]["transcript"] == "متن گفتار"
+    assert reel["brief"] == "پروژهٔ ورودی خانه"
+    assert store.list_assets(reel_id)[1]["transcript"] is None
+    assert any("گفتاربه‌متن ندارد" in item[1] for item in telegram.messages)
 
 
 @pytest.mark.asyncio

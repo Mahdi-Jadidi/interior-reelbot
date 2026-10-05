@@ -76,7 +76,7 @@ def main() -> None:
     settings = Settings.from_env()
     with Store(settings.data_dir / "reelbot.sqlite3") as store:
         if args.action == "report":
-            print(json.dumps({"openai_reserved_usd": store.total_spend("openai")}, indent=2))
+            print(json.dumps({"miarouter_reserved_usd": store.total_spend("miarouter")}, indent=2))
         elif args.action == "retry":
             print(json.dumps(retry_reel(store, args.reel_id), ensure_ascii=False, indent=2))
         elif args.action == "complete":
