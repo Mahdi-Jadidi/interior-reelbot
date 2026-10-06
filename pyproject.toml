@@ -17,10 +17,14 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2"]
+chatgpt = ["keyring>=25,<27", "PyJWT[crypto]>=2.10,<3"]
+higgsfield = ["mcp>=2.3,<3", "keyring>=25,<27"]
 
 [project.scripts]
 reelbot = "reelbot.app:main"
 reelbot-admin = "reelbot.admin:main"
+reelbot-chatgpt = "reelbot.chatgpt_plan:openai_auth_cli"
+reelbot-higgsfield = "reelbot.higgsfield_auth:higgsfield_auth_cli"
 
 [tool.setuptools.packages.find]
 include = ["reelbot*"]

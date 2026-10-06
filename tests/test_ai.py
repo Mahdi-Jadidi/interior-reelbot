@@ -18,7 +18,7 @@ class FakeResponses:
         self.calls.append(kwargs)
         value = self.values.pop(0)
         return SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(value)))],
+            choices=[SimpleNamespace(message=SimpleNamespace(content=value if isinstance(value, str) else json.dumps(value)))],
             usage=SimpleNamespace(prompt_tokens=100, completion_tokens=50),
         )
 
@@ -50,7 +50,7 @@ class FakeClient:
 def plan(**overrides):
     value = {
         "idea": "تحول فضای کوچک", "hook": "این گوشه را ببینید", "story": "شروع، جزئیات، پایان",
-        "script": "این فضا گرم‌تر شد", "shotlist": [
+        "script": " ".join(["این فضا آرام‌تر می‌شود", "نور پنجره به جزئیات جان می‌دهد", "هر گوشه فرصتی برای آسایش است", "طراحی خوب زندگی روزمره را دلنشین‌تر می‌کند"] * 4), "shotlist": [
             {"asset_index": 0, "description": "نمای ورودی"},
             {"asset_index": 0, "description": "نمای جزئیات"},
         ],
@@ -65,6 +65,33 @@ def plan(**overrides):
 
 
 class DirectorTests(unittest.TestCase):
+    def test_structured_result_accepts_fenced_json_only(self):
+        director = AIDirector("test", client=FakeClient(['Here is the result:\n```json\n{"category":"question"}\n```']))
+        result = asyncio.run(director._structured(
+            "test", "test-model", "Return JSON", {}, {"type": "object"}
+        ))
+        self.assertEqual(result, {"category": "question"})
+
+    def test_structured_result_accepts_python_quoted_mapping_from_gateway(self):
+        director = AIDirector("test", client=FakeClient(["{'category': 'question'}"]))
+        result = asyncio.run(director._structured(
+            "test", "test-model", "Return JSON", {}, {"type": "object"}
+        ))
+        self.assertEqual(result, {"category": "question"})
+
+    def test_structured_gateway_timeout_is_bounded_and_actionable(self):
+        class SlowResponses(FakeResponses):
+            async def create(self, **kwargs):
+                await asyncio.sleep(0.05)
+
+        client = FakeClient([])
+        client.chat.completions = SlowResponses([])
+        director = AIDirector("test", client=client, request_timeout_seconds=0.005)
+        with self.assertRaisesRegex(TimeoutError, "exceeded 0.005s"):
+            asyncio.run(director._structured(
+                "test", "test-model", "Return JSON", {}, {"type": "object"}
+            ))
+
     def test_client_uses_miarouter_chat_endpoint(self):
         with patch("reelbot.ai.AsyncOpenAI") as client_factory:
             AIDirector("masked", base_url="https://miarouter.online/v1")
@@ -89,7 +116,8 @@ class DirectorTests(unittest.TestCase):
         for fake in [
             plan(source_facts=["متریال مرمر ایتالیایی"]),
             plan(language="en"),
-            plan(claim_support=[{"claim": "این فضا گرم‌تر شد", "evidence": "سنگ مرمر ایتالیایی"}]),
+            plan(claim_support=[{"claim": "این فضا آرام‌تر می‌شود", "evidence": "سنگ مرمر ایتالیایی"}]),
+            plan(script="خیلی کوتاه"),
         ]:
             director = AIDirector("test", client=FakeClient([fake]))
             with self.assertRaises(ValueError):

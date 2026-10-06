@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .ai import Director
+from .chatgpt_plan import ChatGPTPlanClient, ChatGPTPlanError
 from .config import Settings
 from .media import sha256_file
 from .store import Store
@@ -39,6 +40,7 @@ def plan_card(plan: dict[str, Any]) -> str:
         f"زبان: {LANGUAGES.get(plan.get('language'), plan.get('language', '—'))}\n"
         f"ایده: {plan.get('idea', '—')}\n"
         f"هوک: {plan.get('hook', '—')}\n"
+        f"دلیل انتخاب: {plan.get('selection_reason', '—')}\n"
         f"داستان: {plan.get('story', '—')}\n"
         f"متن گفتار:\n{plan.get('script', '—')}\n\n"
         f"نماها: {shot_text or '—'}\n"
@@ -288,7 +290,7 @@ class ReelBot:
 
     async def _make_plan(self, reel: dict, feedback: str | None = None) -> None:
         chat_id = int(reel["chat_id"])
-        if not self.settings.ai_router_api_key or self.director is None:
+        if self.director is None:
             await self.telegram.send_message(
                 chat_id,
                 "فایل‌های پروژه ذخیره شدند. تولید خودکار سناریو پس از تنظیم دسترسی مدل هوش مصنوعی فعال می‌شود؛ "
@@ -309,7 +311,9 @@ class ReelBot:
                 return
         if brief != (reel.get("brief") or ""):
             reel = self.store.update_reel(reel["id"], brief=brief)
-        if not self.store.reserve_spend(reel["id"], "miarouter", self.settings.ai_plan_request_cost_usd, self.settings.monthly_ai_limit_usd):
+        if (self.settings.ai_provider == "miarouter" and not self.store.reserve_spend(
+            reel["id"], "miarouter", self.settings.ai_plan_request_cost_usd, self.settings.monthly_ai_limit_usd
+        )):
             await self.telegram.send_message(chat_id, "سقف هزینهٔ ماهانهٔ برنامه‌ریزی پر شده است؛ درخواست برای بررسی ثبت شد.")
             self.store.update_reel(reel["id"], status="needs_operator")
             return
@@ -322,6 +326,21 @@ class ReelBot:
                 assets=self.store.list_assets(reel["id"]),
                 feedback=feedback,
             )
+        except ChatGPTPlanError as exc:
+            LOG.warning("ChatGPT plan request failed for reel %s: %s", reel["id"], exc)
+            previous_status = reel.get("status")
+            restore_status = previous_status if previous_status in {
+                "awaiting_feedback", "awaiting_plan_approval", "collecting", "awaiting_clarification"
+            } else "collecting"
+            self.store.update_reel(reel["id"], status=restore_status)
+            if "usage_limit" in str(exc) or "429" in str(exc):
+                message = "سهمیهٔ استفاده از ChatGPT فعلاً به سقف رسیده است. در تنظیمات ChatGPT بخش Usage را بررسی کنید؛ بات به MiA سوئیچ نمی‌کند."
+            elif "connect ChatGPT first" in str(exc) or "session expired" in str(exc):
+                message = "اتصال ChatGPT نیاز به ورود دوباره دارد. روی همین سیستم دستور reelbot-chatgpt connect را اجرا کنید؛ فایل‌های پروژه محفوظ‌اند."
+            else:
+                message = "درخواست ChatGPT کامل نشد. فایل‌ها محفوظ‌اند و هیچ مسیر پرداخت دیگری خودکار فعال نمی‌شود؛ وضعیت اتصال را با reelbot-chatgpt status بررسی کنید."
+            await self.telegram.send_message(chat_id, message)
+            return
         except Exception:
             LOG.exception("Could not draft a plan for reel %s", reel["id"])
             previous_status = reel.get("status")
@@ -417,12 +436,19 @@ def main() -> None:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     store = Store(settings.data_dir / "reelbot.sqlite3")
     telegram = TelegramAPI(settings.telegram_bot_token)
-    director = Director(
-        api_key=settings.ai_router_api_key,
-        base_url=settings.ai_base_url,
-        cheap_model=settings.ai_cheap_model,
-        creative_model=settings.ai_creative_model,
-    ) if settings.ai_router_api_key else None
+    if settings.ai_provider == "chatgpt_plan":
+        director = Director(
+            api_key="", cheap_model=settings.chatgpt_plan_model,
+            creative_model=settings.chatgpt_plan_model,
+            client=ChatGPTPlanClient(),
+        )
+    else:
+        director = Director(
+            api_key=settings.ai_router_api_key,
+            base_url=settings.ai_base_url,
+            cheap_model=settings.ai_cheap_model,
+            creative_model=settings.ai_creative_model,
+        ) if settings.ai_router_api_key else None
     bot = ReelBot(settings, store, telegram, director)
     worker = RenderWorker(settings, store, telegram, director)
 
